@@ -1,9 +1,11 @@
 package com.example.demo.filter;
 
+import com.example.demo.guardrail.GuardrailPolicy;
 import org.reactivestreams.Publisher;
-import org.springframework.cloud.gateway.filter.GlobalFilter;
-import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
 import org.springframework.core.io.buffer.DataBufferUtils;
@@ -12,37 +14,38 @@ import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.http.server.reactive.ServerHttpResponseDecorator;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.server.WebFilter;
+import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 
+/**
+ * Scans response bodies for toxic, illegal-finance, prompt-injection, and malicious-code
+ * content and short-circuits with HTTP 451 if matched.
+ *
+ * Originally implemented as a Spring Cloud Gateway GlobalFilter, which only runs for
+ * requests matched by a configured route — with spring.cloud.gateway.routes empty, this
+ * never executed against real traffic. Converted to a plain WebFlux WebFilter (see
+ * AUDIT_AND_REFACTOR_PLAN.md section 2/4), and the keyword lists now live in the shared
+ * GuardrailPolicy instead of a private copy (previously this filter lacked the
+ * malicious-code patterns that only existed in LlmController).
+ */
 @Component
-public class OutputGuardrailFilter implements GlobalFilter, Ordered {
+@Order(-2)
+public class OutputGuardrailFilter implements WebFilter, Ordered {
 
-    private static final List<String> TOXIC_WORDS = List.of(
-            "idiot", "stupid", "kill yourself", "you are worthless",
-            "hate you", "loser", "moron", "shut up"
-    );
+    private static final Logger log = LoggerFactory.getLogger(OutputGuardrailFilter.class);
 
-    private static final List<String> ILLEGAL_FINANCE = List.of(
-            "guaranteed profit", "guaranteed return", "100% profit",
-            "insider trading", "pump and dump", "ponzi",
-            "illegal investment", "tax evasion"
-    );
+    private final GuardrailPolicy guardrailPolicy;
 
-    private static final List<String> INJECTION_PATTERNS = List.of(
-            "ignore previous instructions",
-            "ignore all instructions",
-            "disregard your instructions",
-            "you are now",
-            "forget your training",
-            "new instructions:"
-    );
+    public OutputGuardrailFilter(GuardrailPolicy guardrailPolicy) {
+        this.guardrailPolicy = guardrailPolicy;
+    }
 
     @Override
-    public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
+    public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
 
         ServerHttpResponse originalResponse = exchange.getResponse();
         DataBufferFactory bufferFactory = originalResponse.bufferFactory();
@@ -52,7 +55,6 @@ public class OutputGuardrailFilter implements GlobalFilter, Ordered {
             @Override
             public Mono<Void> writeWith(Publisher<? extends DataBuffer> body) {
 
-                // Collect ALL body chunks into one, works for both Mono and Flux
                 Flux<? extends DataBuffer> fluxBody = Flux.from(body);
 
                 return DataBufferUtils.join(fluxBody)
@@ -63,54 +65,28 @@ public class OutputGuardrailFilter implements GlobalFilter, Ordered {
                             DataBufferUtils.release(dataBuffer);
 
                             String responseBody = new String(bytes, StandardCharsets.UTF_8);
-                            String lowerBody = responseBody.toLowerCase();
+                            log.debug("OutputGuardrailFilter — checking response body");
 
-                            System.out.println("\n==================================");
-                            System.out.println("🛡️  Output Guardrail — Checking response...");
-                            System.out.println("Body: " + responseBody);
+                            GuardrailPolicy.Verdict verdict = guardrailPolicy.classify(responseBody);
 
-                            // Check toxic words
-                            for (String word : TOXIC_WORDS) {
-                                if (lowerBody.contains(word.toLowerCase())) {
-                                    System.out.println("🚨 BLOCKED — Toxic: " + word);
-                                    System.out.println("==================================\n");
-                                    originalResponse.setStatusCode(HttpStatus.UNAVAILABLE_FOR_LEGAL_REASONS);
-                                    byte[] blocked = "{\"error\":\"Response blocked: toxic content detected\"}"
-                                            .getBytes(StandardCharsets.UTF_8);
-                                    originalResponse.getHeaders().setContentLength(blocked.length);
-                                    return super.writeWith(Mono.just(bufferFactory.wrap(blocked)));
-                                }
+                            if (verdict.isBlocked()) {
+                                log.warn("OutputGuardrailFilter — BLOCKED ({}): {}",
+                                        verdict.category(), verdict.matchedPattern());
+                                exchange.getAttributes().put(AuditFilter.ATTR_EVENT,
+                                        "BLOCKED_" + verdict.category().name());
+                                exchange.getAttributes().put(AuditFilter.ATTR_MATCHED_CATEGORY,
+                                        verdict.category().name());
+                                exchange.getAttributes().put(AuditFilter.ATTR_MATCHED_PATTERN,
+                                        verdict.matchedPattern());
+                                originalResponse.setStatusCode(HttpStatus.UNAVAILABLE_FOR_LEGAL_REASONS);
+                                byte[] blocked = ("{\"error\":\"Response blocked: " +
+                                        verdict.category().name().toLowerCase().replace('_', ' ') +
+                                        " content detected\"}").getBytes(StandardCharsets.UTF_8);
+                                originalResponse.getHeaders().setContentLength(blocked.length);
+                                return super.writeWith(Mono.just(bufferFactory.wrap(blocked)));
                             }
 
-                            // Check illegal financial advice
-                            for (String phrase : ILLEGAL_FINANCE) {
-                                if (lowerBody.contains(phrase.toLowerCase())) {
-                                    System.out.println("🚨 BLOCKED — Finance: " + phrase);
-                                    System.out.println("==================================\n");
-                                    originalResponse.setStatusCode(HttpStatus.UNAVAILABLE_FOR_LEGAL_REASONS);
-                                    byte[] blocked = "{\"error\":\"Response blocked: illegal financial content detected\"}"
-                                            .getBytes(StandardCharsets.UTF_8);
-                                    originalResponse.getHeaders().setContentLength(blocked.length);
-                                    return super.writeWith(Mono.just(bufferFactory.wrap(blocked)));
-                                }
-                            }
-
-                            // Check prompt injection
-                            for (String pattern : INJECTION_PATTERNS) {
-                                if (lowerBody.contains(pattern.toLowerCase())) {
-                                    System.out.println("🚨 BLOCKED — Injection: " + pattern);
-                                    System.out.println("==================================\n");
-                                    originalResponse.setStatusCode(HttpStatus.UNAVAILABLE_FOR_LEGAL_REASONS);
-                                    byte[] blocked = "{\"error\":\"Response blocked: prompt injection detected\"}"
-                                            .getBytes(StandardCharsets.UTF_8);
-                                    originalResponse.getHeaders().setContentLength(blocked.length);
-                                    return super.writeWith(Mono.just(bufferFactory.wrap(blocked)));
-                                }
-                            }
-
-                            // All clean
-                            System.out.println("✅ Response is clean — passing through");
-                            System.out.println("==================================\n");
+                            log.debug("OutputGuardrailFilter — response is clean, passing through");
                             byte[] cleanBytes = responseBody.getBytes(StandardCharsets.UTF_8);
                             originalResponse.getHeaders().setContentLength(cleanBytes.length);
                             return super.writeWith(Mono.just(bufferFactory.wrap(cleanBytes)));

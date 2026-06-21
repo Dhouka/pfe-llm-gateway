@@ -10,7 +10,16 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: http://localhost:8180/realms/llm-gateway
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/llm-gateway}
+          # Separate from issuer-uri on purpose: issuer-uri's value must exactly match the
+          # "iss" claim Keycloak stamps into every token (validated by Spring's
+          # JwtIssuerValidator), while jwk-set-uri is just where THIS process fetches
+          # public keys from over the network. They're the same address when running the
+          # gateway directly on the host; they diverge when the gateway runs inside
+          # docker-compose, where "localhost:8180" (what a human/test client uses, and
+          # what ends up in the token's iss claim) isn't reachable from inside the
+          # container — see docker-compose.yml's gateway service for the override.
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:8180/realms/llm-gateway/protocol/openid-connect/certs}
   ai:
     ollama:
       base-url: http://localhost:11434
@@ -21,6 +30,14 @@ spring:
   cloud:
     gateway:
       routes: []
+
+pii:
+  service:
+    url: ${PII_SERVICE_URL:http://localhost:5001}
+
+audit:
+  log:
+    file: ${AUDIT_LOG_FILE:audit-log.jsonl}
 
 logging:
   level:

@@ -31,3 +31,24 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### macOS ###
+.DS_Store
+**/.DS_Store
+
+### Python (pii-service, llm-flask-service) ###
+venv/
+**/venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+
+### IDE (root, applies repo-wide) ###
+.idea/
+
+### Runtime audit log (AuditLogStore's on-disk persistence — see AuditLogStore.java) ###
+audit-log.jsonl
+*.jsonl

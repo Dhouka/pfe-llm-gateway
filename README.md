@@ -1,22 +1,89 @@
 # LLM Secure Gateway - PFE Satoripop
 
-Built with Spring Cloud Gateway + Spring AI to protect banking LLM deployments.
+A secured REST API in front of a local Ollama LLM, built for banking-style deployments:
+JWT auth, role-based authorization, PII redaction, output guardrails, rate limiting, and
+audit logging. See `CLAUDE.md` for the full architecture writeup and
+`AUDIT_AND_REFACTOR_PLAN.md` for the history of issues found and fixed in this repo.
 
-## Technologies
-- Spring Cloud Gateway 4.1
-- Spring AI 1.0.0-M5 + Ollama (TinyLlama)
-- Keycloak 24 JWT Authentication
-- Redis Rate Limiting
-- PII Detection with regex
-- Output Guardrails (toxic, financial, injection)
-- Live Audit Dashboard
+Despite the name, this is **not** a reverse proxy — `spring.cloud.gateway.routes` is
+intentionally empty. `LlmController` (`POST /llm/chat`) is a normal secured endpoint that
+calls Ollama directly via Spring AI; the security stack (auth, rate limiting, PII
+redaction, guardrails, audit logging) is what "gateway" refers to here, not request
+proxying.
 
-## Quick Start
-1. docker compose up -d
-2. ollama pull tinyllama
-3. java -jar target/gateway-0.0.1-SNAPSHOT.jar
-4. cd llm-flask-service && python3 app.py
-5. Open http://127.0.0.1:5000/dashboard
+## Components
+
+- **gateway** (root, Java/Spring) — the security stack: JWT auth via Keycloak, Redis
+  rate limiting, regex + Presidio PII redaction, output guardrails, audit logging.
+  `LlmController` is the only consumer-facing AI endpoint.
+- **pii-service** (`pii-service/`, Flask + Presidio) — ML-based PII detection, called by
+  the gateway as a second redaction pass. Fails open if unreachable.
+- **llm-flask-service** (`llm-flask-service/`, Flask) — dashboard UI only. Reads audit
+  data by proxying `GET /audit` from the gateway; it has no chat or guardrail logic of
+  its own.
+
+## Credentials
+
+| Interface | Username | Password | Roles | Notes |
+|---|---|---|---|---|
+| [Dashboard](http://127.0.0.1:5000/dashboard) | `dev-user` | `dev-user` | `llm-user`, `audit-viewer` | Pre-provisioned test account |
+| [Keycloak Admin Console](http://localhost:8180) | `admin` | set in `.env` (`KEYCLOAK_ADMIN_PASSWORD`) | Keycloak admin | Manage users, roles, realm config |
+
+The `dev-user` account is auto-created when Keycloak starts with `--import-realm` (as
+configured in `docker-compose.yml`). It holds both `llm-user` (needed for `POST /llm/chat`)
+and `audit-viewer` (needed for `GET /audit` and the dashboard).
+
+## Quick start (Docker Compose — recommended)
+
+1. Copy `.env.example` to `.env` and set `KEYCLOAK_ADMIN_PASSWORD` (required, no default).
+2. `docker compose up -d --build` — starts Redis, Keycloak (auto-imports the
+   `llm-gateway` realm from `keycloak/llm-gateway-realm.json`, including the `llm-user`
+   and `audit-viewer` roles the gateway requires, plus a `dev-user`/`dev-user` test
+   account holding both), Ollama, `pii-service`, and the gateway itself.
+3. `docker exec gateway-ollama ollama pull tinyllama` (the `tinyllama` model isn't baked
+   into the Ollama image).
+4. Get a token for the dev test user:
+   ```
+   curl -X POST http://localhost:8180/realms/llm-gateway/protocol/openid-connect/token \
+     -d 'client_id=gateway-client' -d 'grant_type=password' \
+     -d 'username=dev-user' -d 'password=dev-user'
+   ```
+5. Call the gateway: `curl -X POST http://localhost:8080/llm/chat -H "Authorization: Bearer <access_token>" -H 'Content-Type: application/json' -d '{"message":"hello"}'`
+6. Audit data: `curl http://localhost:8080/audit -H "Authorization: Bearer <access_token>"` (requires the `audit-viewer` role; `dev-user` has it).
+7. Dashboard (optional): `cd llm-flask-service && source venv/bin/activate && python3 app.py`, then open http://127.0.0.1:5000/dashboard.
+
+## Running components individually (without Compose)
+
+```
+docker compose up -d redis keycloak ollama pii-service   # backing services only
+ollama pull tinyllama
+./mvnw spring-boot:run                                     # gateway on :8080
+```
+
+Requires the same `llm-gateway` Keycloak realm/roles — either let Keycloak's
+`--import-realm` (already configured in `docker-compose.yml`) create them, or set them
+up manually in the admin console (http://localhost:8180, login from `.env`).
+
+## Tests
+
+```
+./mvnw test
+```
+
+Tests exercise the real production classes (`GuardrailPolicy`, `PiiFilter`,
+`OutputGuardrailFilter`, `AuditFilter`, `AuditLogStore`, `LlmController`,
+`GlobalExceptionHandler`), mocking only true I/O boundaries (`PiiServiceClient`,
+`ChatClient`).
+
+## Notes
+
+- Spring AI is pinned to `1.0.0-M5`, a pre-GA milestone — track to a GA release before
+  this goes anywhere near a real banking deployment.
+- The audit log is written to `audit-log.jsonl` (path configurable via `AUDIT_LOG_FILE`)
+  in addition to the in-memory, 100-entry-capped view `/audit` serves — a flat file is a
+  pragmatic stopgap, not a substitute for a real database if this needs to be queried or
+  retained under a real compliance policy.
 
 ## Author
+
 Yassine Kooli - PFE Satoripop 2026

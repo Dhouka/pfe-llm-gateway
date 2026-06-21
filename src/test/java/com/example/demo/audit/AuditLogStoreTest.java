@@ -2,20 +2,28 @@ package com.example.demo.audit;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.file.Path;
 
 public class AuditLogStoreTest {
 
     private AuditLogStore store;
 
+    @TempDir
+    Path tempDir;
+
     @BeforeEach
     void setUp() {
-        store = new AuditLogStore();
+        // Use a throwaway file in JUnit's per-test temp dir so test runs never write
+        // an audit-log.jsonl into the repo working directory.
+        store = new AuditLogStore(tempDir.resolve("audit-log-test.jsonl").toString());
     }
 
     private AuditEntry makeEntry(String event) {
         return new AuditEntry(
-            "2026-01-01 00:00:00", "testuser", "POST", "/llm/chat",
+            "test-correlation-id", "2026-01-01 00:00:00", "testuser", "POST", "/llm/chat",
             200, "100ms", event, 10, 50, 60, 0.0
         );
     }
