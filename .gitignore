@@ -50,5 +50,7 @@ __pycache__/
 .idea/
 
 ### Runtime audit log (AuditLogStore's on-disk persistence — see AuditLogStore.java) ###
-audit-log.jsonl
+audit.db
+audit.db-wal
+audit.db-shm
 *.jsonl

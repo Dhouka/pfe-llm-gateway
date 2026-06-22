@@ -30,11 +30,10 @@
 			<artifactId>spring-cloud-starter-gateway</artifactId>
 		</dependency>
 
-		<!-- ✅ Spring AI - Ollama integration -->
+		<!-- ✅ Spring AI - Ollama integration (GA, version managed by spring-ai-bom below) -->
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-ollama-spring-boot-starter</artifactId>
-			<version>1.0.0-M5</version>
+			<artifactId>spring-ai-starter-model-ollama</artifactId>
 		</dependency>
 
 		<!-- ✅ Keycloak OAuth2 JWT validation -->
@@ -68,6 +67,14 @@
 			<optional>true</optional>
 		</dependency>
 
+		<!-- ✅ Real audit persistence (SQLite via plain JDBC) — replaces the JSONL
+		     flat-file stopgap. See AuditLogStore.java. -->
+		<dependency>
+			<groupId>org.xerial</groupId>
+			<artifactId>sqlite-jdbc</artifactId>
+			<version>3.53.2.0</version>
+		</dependency>
+
 		<!-- ✅ Tests -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -83,14 +90,6 @@
 
 	</dependencies>
 
-	<repositories>
-		<repository>
-			<id>spring-milestones</id>
-			<name>Spring Milestones</name>
-			<url>https://repo.spring.io/milestone</url>
-		</repository>
-	</repositories>
-
 	<dependencyManagement>
 		<dependencies>
 			<!-- Spring Cloud -->
@@ -101,11 +100,20 @@
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>
-			<!-- Spring AI BOM -->
+			<!-- Spring AI BOM — GA release (was pinned to the 1.0.0-M5 pre-release
+			     milestone; 1.0.3 is the latest 1.0.x GA patch as of this change).
+			     The Ollama starter's artifactId also changed at GA from
+			     spring-ai-ollama-spring-boot-starter to spring-ai-starter-model-ollama
+			     — see the dependency above. Core API used here (ChatClient,
+			     OllamaChatModel, ChatResponse, OllamaOptions) was already stable as
+			     of M5 and is unchanged at GA, so no application code changes were
+			     needed — but this has NOT been compiled/tested in this sandbox (no
+			     Maven Central access here); run `./mvnw clean test` locally before
+			     trusting this, same caveat as everything else in this repo. -->
 			<dependency>
 				<groupId>org.springframework.ai</groupId>
 				<artifactId>spring-ai-bom</artifactId>
-				<version>1.0.0-M5</version>
+				<version>1.0.3</version>
 				<type>pom</type>
 				<scope>import</scope>
 			</dependency>

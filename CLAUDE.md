@@ -15,7 +15,7 @@ Three independently runnable components:
 - **gateway** (root, Java/Spring) — the security stack: Spring Cloud Gateway dependency +
   Spring AI, Keycloak JWT auth + role-based authorization, Redis rate limiting (**declared
   but not actually wired — see gaps below**), regex + Presidio (via pii-service) PII
-  redaction, output guardrails, audit logging (in-memory view + on-disk JSONL). This is the
+  redaction, output guardrails, audit logging (in-memory view + SQLite-backed persistence). This is the
   single source of truth for the chat/security flow — `LlmController` is the only
   consumer-facing AI endpoint. Despite the name, there are no proxied Spring Cloud Gateway
   routes (`spring.cloud.gateway.routes` is intentionally empty) — "gateway" here means the
@@ -90,8 +90,9 @@ compile-verified.**
 - `src/main/java/com/example/demo/filter/AuditFilter.java` — one audit entry per request
   (latency, status, event, tokens, toxicity score, UUID correlation ID).
 - `src/main/java/com/example/demo/audit/AuditLogStore.java` — in-memory (capped 100, used by
-  `/audit`) **plus** an on-disk JSONL append log (`audit-log.jsonl`, path via
-  `AUDIT_LOG_FILE`) so history survives restarts.
+  `/audit`) **plus** a real SQLite database (`audit.db`, path via `AUDIT_DB_FILE`) so history
+  survives restarts and can actually be queried (e.g. `sqlite3 audit.db "select * from
+  audit_log"`), not just preserved as an opaque flat file.
 - `src/main/java/com/example/demo/controller/AuditController.java` (`GET /audit`) — counts +
   raw log list. Now requires the `audit-viewer` Keycloak role (see Phase 3 security
   hardening below).
@@ -108,8 +109,11 @@ compile-verified.**
 **Technologies ciblées — coverage:**
 - Spring Cloud Gateway: dependency present, used for its `RedisRateLimiter`/`KeyResolver`
   types only — **no actual gateway routes, and see the rate-limiting gap below.**
-- Spring AI: wired (`LlmController` → `ChatClient` → `OllamaChatModel`, pinned to milestone
-  `1.0.0-M5` — track to GA before any real deployment claim).
+- Spring AI: wired (`LlmController` → `ChatClient` → `OllamaChatModel`), on GA release
+  `1.0.3` via `spring-ai-bom` (previously pinned to the `1.0.0-M5` pre-release milestone;
+  the Ollama starter artifact was renamed at GA from `spring-ai-ollama-spring-boot-starter`
+  to `spring-ai-starter-model-ollama`). **Not yet compiled/tested in this sandbox** — run
+  `./mvnw clean test` locally before trusting this.
 - Presidio / regex PII: done (see #1 above).
 - Keycloak: done — JWT auth, role-based authorization (`llm-user` for `/llm/**`,
   `audit-viewer` for `/audit`), realm auto-provisioned via
@@ -216,11 +220,13 @@ a `ChatClient` directly, for tests), classifies the model's raw output via the s
 otherwise), and writes outcome data only as exchange attributes for `AuditFilter` to consume.
 
 `AuditLogStore`: in-memory `CopyOnWriteArrayList` capped at 100 (used by `/audit`'s "recent
-activity" view) **plus** an append-only JSONL file on disk (`audit-log.jsonl`, configurable
-via `AUDIT_LOG_FILE`) so a restart doesn't lose audit history outright. This is a pragmatic
-stopgap, not a real persistence layer — no querying, no retention policy. A real
-Postgres/SQLite-backed store would be the next step if this needs to survive production load
-or be queried for compliance reporting.
+activity" view) **plus** a real SQLite database on disk (`audit.db`, configurable via
+`AUDIT_DB_FILE`, `PRAGMA journal_mode=WAL`) so a restart doesn't lose audit history and the
+full history can actually be queried (e.g. for compliance reporting), not just preserved as
+an opaque flat file. Fails open on `SQLException` (logs a warning, the in-memory view still
+works, but that entry won't survive a restart) — same fail-open philosophy as
+`PiiServiceClient`/`OllamaSemanticGuardrailClassifier`. **Not yet compiled/tested in this
+sandbox** — run `./mvnw clean test` locally before trusting this end-to-end.
 
 `GuardrailPolicy` (`com.example.demo.guardrail`) is the single source of truth for the threat
 taxonomy. Both `OutputGuardrailFilter` and `LlmController` depend on it. **This is keyword
@@ -248,7 +254,7 @@ body instead of a raw stack trace.
   `AuditLogStore`, `LlmController`, and `GlobalExceptionHandler` exercise the real production
   classes (mocking only true I/O boundaries — `PiiServiceClient`, `ChatClient`). Keep new
   tests pointed at the real classes. `AuditLogStore`'s tests use JUnit `@TempDir` for its
-  on-disk log file so test runs don't write into the repo.
+  on-disk SQLite file so test runs don't write an `audit.db` into the repo working directory.
 - This sandbox/CI environment has no Maven Central access — if `./mvnw test` can't resolve
   dependencies here, that's environment, not a real regression. **As of the last session,
   none of the Java changes in this repo have actually been compiled** — verify with a real

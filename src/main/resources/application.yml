@@ -36,8 +36,8 @@ pii:
     url: ${PII_SERVICE_URL:http://localhost:5001}
 
 audit:
-  log:
-    file: ${AUDIT_LOG_FILE:audit-log.jsonl}
+  db:
+    file: ${AUDIT_DB_FILE:audit.db}
 
 logging:
   level:

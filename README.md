@@ -77,12 +77,14 @@ Tests exercise the real production classes (`GuardrailPolicy`, `PiiFilter`,
 
 ## Notes
 
-- Spring AI is pinned to `1.0.0-M5`, a pre-GA milestone — track to a GA release before
-  this goes anywhere near a real banking deployment.
-- The audit log is written to `audit-log.jsonl` (path configurable via `AUDIT_LOG_FILE`)
-  in addition to the in-memory, 100-entry-capped view `/audit` serves — a flat file is a
-  pragmatic stopgap, not a substitute for a real database if this needs to be queried or
-  retained under a real compliance policy.
+- Spring AI is on `1.0.3` (GA, via `spring-ai-bom`) — was previously pinned to the
+  `1.0.0-M5` pre-release milestone; the artifact also changed name at GA from
+  `spring-ai-ollama-spring-boot-starter` to `spring-ai-starter-model-ollama`.
+- The audit log is persisted to a real SQLite database (`audit.db`, path configurable
+  via `AUDIT_DB_FILE`) in addition to the in-memory, 100-entry-capped view `/audit`
+  serves — replaces the previous flat-file JSONL stopgap, so the full history can
+  actually be queried (e.g. `sqlite3 audit.db "select * from audit_log"`), not just
+  "not lost on restart."
 
 ## Author
 

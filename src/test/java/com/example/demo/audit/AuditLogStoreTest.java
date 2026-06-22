@@ -17,8 +17,8 @@ public class AuditLogStoreTest {
     @BeforeEach
     void setUp() {
         // Use a throwaway file in JUnit's per-test temp dir so test runs never write
-        // an audit-log.jsonl into the repo working directory.
-        store = new AuditLogStore(tempDir.resolve("audit-log-test.jsonl").toString());
+        // an audit.db into the repo working directory.
+        store = new AuditLogStore(tempDir.resolve("audit-test.db").toString());
     }
 
     private AuditEntry makeEntry(String event) {

@@ -74,7 +74,7 @@ services:
       # Where THIS container actually fetches JWKS from over the compose network —
       # see application.yml's jwk-set-uri comment for why these two differ here.
       KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/llm-gateway/protocol/openid-connect/certs
-      AUDIT_LOG_FILE: /data/audit-log.jsonl
+      AUDIT_DB_FILE: /data/audit.db
     volumes:
       - gateway-audit-data:/data
     restart: unless-stopped
