@@ -1,0 +1,95 @@
+server:
+  port: 8080
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/llm-gateway}
+          # Separate from issuer-uri on purpose: issuer-uri's value must exactly match the
+          # "iss" claim Keycloak stamps into every token (validated by Spring's
+          # JwtIssuerValidator), while jwk-set-uri is just where THIS process fetches
+          # public keys from over the network. They're the same address when running the
+          # gateway directly on the host; they diverge when the gateway runs inside
+          # docker-compose, where "localhost:8180" (what a human/test client uses, and
+          # what ends up in the token's iss claim) isn't reachable from inside the
+          # container — see docker-compose.yml's gateway service for the override.
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:8180/realms/llm-gateway/protocol/openid-connect/certs}
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        model: tinyllama
+        options:
+          temperature: 0.7
+          # Found 2026-06-30: no token limit was set here, and tinyllama on this CPU-only
+          # setup essentially never emits a natural stop token (done_reason came back
+          # "length", not "stop", even on a trivial 10-token test prompt). Without this,
+          # every /llm/chat call ran until it hit the model's full context window (4096
+          # tokens, ~1.27s/token observed) — i.e. ~85+ minutes per request, which is what
+          # was actually causing /llm/chat (and therefore /audit, since the gateway was
+          # saturated) to appear permanently "stuck" rather than just slow. 512 is a
+          # demo-sane bound for a chat answer; override via OLLAMA_CHAT_NUM_PREDICT if a
+          # longer/shorter answer is needed.
+          num-predict: ${OLLAMA_CHAT_NUM_PREDICT:512}
+
+# Fixed 2026-06-25: spring.cloud.gateway.routes used to be an empty list here, meaning
+# Spring Cloud Gateway — a named PFE-subject technology — was never actually used as a
+# gateway/reverse-proxy (only its RedisRateLimiter/KeyResolver types were reused). The
+# real route is now defined as a Java RouteLocator bean instead of YAML
+# (GatewayRoutesConfig.ollamaProxyRoute), reading the ollama.base-url property below
+# rather than a YAML route list. See GatewayRoutesConfig's Javadoc for what this route
+# does and why it's safe alongside the existing /llm/chat endpoint.
+ollama:
+  base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+
+pii:
+  service:
+    url: ${PII_SERVICE_URL:http://localhost:5001}
+    # Fail-closed by default (changed 2026-06-25): if pii-service is unreachable/erroring,
+    # PiiFilter blocks the request (HTTP 503) instead of forwarding text whose
+    # unstructured-PII status couldn't be verified. Set to false to restore the old
+    # fail-open behavior if availability turns out to matter more than this in practice.
+    fail-closed: ${PII_SERVICE_FAIL_CLOSED:true}
+
+audit:
+  db:
+    file: ${AUDIT_DB_FILE:audit.db}
+
+guardrail:
+  semantic:
+    # Was hardcoded at 3s, which is far shorter than this CPU-only Ollama setup's real
+    # per-call latency (~195s observed for a 280-token tinyllama completion, see
+    # PFE_TODO.md task 3) — meaning the semantic pass always timed out and silently fell
+    # open. Raised to 200s as a demo-safe fix so the classifier actually gets a chance to
+    # run. NOT a production fix: a slow/hung Ollama call now blocks a request for up to
+    # 200s instead of 3s before failing open. The real production fix is a smaller
+    # dedicated classification model or GPU-accelerated inference, not a bigger timeout —
+    # see PFE_TODO.md task 3 for the full tradeoff.
+    timeout-seconds: ${GUARDRAIL_SEMANTIC_TIMEOUT_SECONDS:200}
+    # Found 2026-06-24: tinyllama (used for chat) does not reliably follow system-role
+    # instructions, so it never returns a clean category word for the classification prompt
+    # below regardless of timeout — confirmed by calling Ollama directly with the same
+    # system prompt and getting a 241-token off-topic completion with no category word in it.
+    # Deliberately a SEPARATE, smaller instruction-tuned model used only for classification —
+    # main chat responses still come from spring.ai.ollama.chat.model (tinyllama) above. You
+    # must `ollama pull` whichever model you set here before it will work; it is not pulled
+    # automatically. qwen2.5:0.5b is the default guess — swap via env var if it proves too
+    # weak too (e.g. llama3.2:1b).
+    model: "${GUARDRAIL_SEMANTIC_MODEL:qwen2.5:0.5b}"
+    # Found 2026-06-30: the classification call had no token limit, so a model that
+    # rambles instead of returning a bare category word ran to its full context window
+    # before returning — tens of minutes for a call that only ever needs one word. The
+    # prompt asks for exactly one category word, so this is bounded tightly.
+    num-predict: ${GUARDRAIL_SEMANTIC_NUM_PREDICT:16}
+
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
+    com.example.demo: DEBUG
+    org.springframework.ai: INFO

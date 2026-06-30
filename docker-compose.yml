@@ -1,0 +1,190 @@
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: gateway-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.1
+    container_name: gateway-keycloak
+    ports:
+      - "8180:8080"
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USER:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in your environment or a .env file -- no default in source control}
+      # Fixes the hostname Keycloak stamps into every token's "iss" claim to a constant
+      # (localhost:8180) instead of deriving it from whatever Host header the caller
+      # used to reach it. Without this, a token requested from the host (iss=localhost:8180)
+      # and a gateway container validating via the internal Docker network would disagree
+      # on the issuer string and every request would fail JWT validation.
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8180"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
+      # Exposes /health/ready. NOTE: this is on the MAIN http port (8080) in Keycloak
+      # 24.x, not a separate management port — Quarkus's separate management interface
+      # (default port 9000) only became the out-of-the-box default starting in Keycloak
+      # 26. Probing 9000 against this 24.0.1 image gets "connection refused" even when
+      # Keycloak is fully up and serving requests on 8080 (confirmed 2026-06-26: realm
+      # imported, "started in 86.822s... Listening on: http://0.0.0.0:8080" in the logs,
+      # while `docker exec ... /dev/tcp/127.0.0.1/9000` got "Connection refused" — the
+      # container ran "unhealthy" for 6+ hours despite being genuinely ready the whole
+      # time, which also explains why `gateway` and `dashboard` never started: their
+      # `depends_on: condition: service_healthy` was waiting on a healthcheck that could
+      # never pass on this image version). The optimized Keycloak/UBI image ships no
+      # curl, but bash (with /dev/tcp support) is present, so the healthcheck below uses
+      # that instead of installing a package at startup.
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak/llm-gateway-realm.json:/opt/keycloak/data/import/llm-gateway-realm.json:ro
+    # --import-realm loads keycloak/llm-gateway-realm.json on startup (creates the
+    # llm-gateway realm with the llm-user/audit-viewer roles that RateLimiterConfig
+    # requires, plus a dev-user/dev-user test account holding both roles). Keycloak
+    # skips re-import automatically once the realm already exists in its DB.
+    command: start-dev --import-realm
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '200' <&3"]
+      interval: 10s
+      timeout: 5s
+      # retries=10/start_period=90s (total ~190s budget) was occasionally too tight on a
+      # cold start (image not cached, Docker Desktop under load from other containers) —
+      # bumped to give --import-realm more room before being declared unhealthy, which
+      # was otherwise blocking gateway/dashboard via depends_on: condition: service_healthy.
+      retries: 18
+      start_period: 120s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: gateway-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  pii-service:
+    build: ./pii-service
+    container_name: gateway-pii-service
+    init: true
+    ports:
+      - "5001:5001"
+    environment:
+      PII_SERVICE_PORT: 5001
+    restart: unless-stopped
+    # /health is a real route in app.py (returns {"status": "ok"}), added specifically
+    # so this healthcheck has something real to call rather than guessing at /analyze.
+    #
+    # Found 2026-06-30: start_period=10s/retries=5/interval=10s gave only ~60s before
+    # Docker Compose's `up` gave up waiting and failed the whole stack with "dependency
+    # pii-service failed to start" — but app.py builds Presidio's AnalyzerEngine (loading
+    # BOTH en_core_web_lg and fr_core_news_lg spaCy models into memory) at module import
+    # time, synchronously, before Flask even starts listening. That alone is slow, and is
+    # much slower under real CPU contention from the ollama container also starting up at
+    # the same time (observed: pii-service sustained 251% CPU for 5+ minutes with zero
+    # response while still "unhealthy", with no OOM and no crash — it was just still
+    # loading). Raised the budget to ~5.5 minutes (start_period 180s + 10 retries * 15s)
+    # to give the model load real room on a CPU-only / resource-constrained host.
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/health')\" || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
+
+  gateway:
+    build: .
+    container_name: gateway-app
+    # Runs a lightweight init (tini) as PID 1 so the JVM doesn't end up as PID 1 itself.
+    # Without this, a hung/zombie JVM process can become unkillable by `docker stop`
+    # (no init process to reap it or forward signals) — seen in practice on `docker
+    # compose up -d --build` after a previous run left a container in this state.
+    init: true
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      pii-service:
+        condition: service_healthy
+    # /actuator/** is explicitly permitAll() in RateLimiterConfig's security chain (see
+    # CLAUDE.md), so this doesn't need a token. Actuator is already a pom.xml dependency.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    environment:
+      # Spring Boot's relaxed env-var binding maps these directly onto
+      # spring.data.redis.host / spring.ai.ollama.base-url — no extra ${...}
+      # placeholders needed in application.yml for these two.
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_AI_OLLAMA_BASE_URL: http://ollama:11434
+      PII_SERVICE_URL: http://pii-service:5001
+      # Must match what a token requester sees as Keycloak's address (KC_HOSTNAME above
+      # fixes this to localhost:8180 regardless of caller) — used for "iss" validation.
+      KEYCLOAK_ISSUER_URI: http://localhost:8180/realms/llm-gateway
+      # Where THIS container actually fetches JWKS from over the compose network —
+      # see application.yml's jwk-set-uri comment for why these two differ here.
+      KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/llm-gateway/protocol/openid-connect/certs
+      AUDIT_DB_FILE: /data/audit.db
+    volumes:
+      - gateway-audit-data:/data
+    restart: unless-stopped
+
+  dashboard:
+    build: ./llm-flask-service
+    container_name: gateway-dashboard
+    ports:
+      # Host-side port 5000 conflicts with macOS's AirPlay Receiver / Control Center,
+      # which binds 5000 by default on modern macOS (confirmed 2026-06-26: "address
+      # already in use" trying to publish 5000 on the host, even though nothing in this
+      # repo's own stack was using it). Remapped to 5050 on the host; the container's
+      # internal port stays 5000 (matches DASHBOARD_PORT's default in app.py and the
+      # healthcheck below, which runs inside the container and is unaffected by this).
+      - "5050:5000"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    environment:
+      # Both reached over the compose network, not the host-facing addresses a
+      # browser would use (those are localhost:8080/localhost:8180) — this service
+      # itself makes the requests server-side (real Keycloak password-grant login in
+      # /login, and the /audit* proxy), so it talks to the other containers directly.
+      GATEWAY_URL: http://gateway:8080
+      KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/llm-gateway/protocol/openid-connect/token
+      KEYCLOAK_CLIENT_ID: gateway-client
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-dev-only-insecure-secret-change-me}
+    restart: unless-stopped
+    # /session never requires auth and always returns 200 with a JSON body — a real,
+    # cheap route to confirm the Flask app itself is actually serving requests.
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/session')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  ollama-data:
+  gateway-audit-data:

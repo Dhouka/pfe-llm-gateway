@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Gateway — Security Dashboard</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ── LOGIN ────────────────────────────────────────────── -->
+<div class="login-overlay" id="login-overlay">
+    <div class="login-box">
+        <div class="login-logo">
+            <img src="/static/satoripop-logo.svg" alt="Satoripop">
+        </div>
+        <div class="login-title">Security Dashboard</div>
+        <div class="login-subtitle">Satoripop Enterprise AI Security Platform</div>
+        <input type="text" class="login-input" id="login-user" placeholder="Username" autocomplete="username">
+        <input type="password" class="login-input" id="login-pass" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+        <button class="login-btn" onclick="doLogin()">Sign In</button>
+        <div class="login-error" id="login-error">Invalid username or password</div>
+        <div class="login-footer">Authorized personnel only &bull; Satoripop 2026</div>
+    </div>
+</div>
+
+<!-- ── DASHBOARD ────────────────────────────────────────── -->
+<div id="dashboard" style="display:none">
+
+<div class="header">
+    <div class="header-left">
+        <img src="/static/satoripop-logo.svg" style="height:38px;width:38px;border-radius:10px;" alt="Satoripop">
+        <div>
+            <h1>Security Dashboard</h1>
+            <div class="subtitle">LLM Gateway — PII Redaction &bull; Guardrails &bull; Audit</div>
+        </div>
+    </div>
+    <div class="header-right">
+        <div class="bank-badge">Zitouna Bank / BNA</div>
+        <div class="live-badge" id="live-badge" onclick="toggleRefresh()" title="Click to pause/resume auto-refresh">
+            <span class="dot"></span><span id="live-text">LIVE</span>
+        </div>
+        <span id="user-label" style="color:#475569;font-size:11px;"></span>
+        <button class="logout-btn" onclick="doLogout()">Logout</button>
+    </div>
+</div>
+
+<!-- ── INSIGHTS BAR ─────────────────────────────────────── -->
+<div class="insights-bar">
+    <div class="insights-toggle" id="insights-toggle" onclick="toggleInsights()">
+        <span class="arrow">&#9654;</span> Security Insights
+    </div>
+    <div class="insights-panel" id="insights-panel">
+        <div class="insights-grid">
+            <div class="insight-card">
+                <div class="label">Security Summary</div>
+                <div id="insight-summary" style="color:#94a3b8;font-size:13px;line-height:1.6;">
+                    No data yet
+                </div>
+            </div>
+            <div class="insight-card">
+                <div class="label">Threat Categories</div>
+                <div class="insight-tags" id="insight-tags">
+                    <span style="color:#475569;font-size:11px;">No threats detected</span>
+                </div>
+            </div>
+            <div class="insight-card">
+                <div class="label">Performance</div>
+                <div id="insight-performance" style="color:#94a3b8;font-size:13px;line-height:1.8;">
+                    No data yet
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── STATS ────────────────────────────────────────────── -->
+<div class="stats">
+    <div class="stat-card total">
+        <div class="stat-icon">&#9632;</div>
+        <div class="number" id="stat-total">0</div>
+        <div class="label">Total Requests</div>
+    </div>
+    <div class="stat-card allowed">
+        <div class="stat-icon">&#9632;</div>
+        <div class="number" id="stat-allowed">0</div>
+        <div class="label">Allowed</div>
+        <div class="stat-mini" id="stat-allowed-pct"></div>
+    </div>
+    <div class="stat-card blocked">
+        <div class="stat-icon">&#9632;</div>
+        <div class="number" id="stat-blocked">0</div>
+        <div class="label">Threats Blocked</div>
+        <div class="stat-mini" id="stat-blocked-pct"></div>
+    </div>
+    <div class="stat-card score">
+        <div class="stat-icon">&#9632;</div>
+        <div class="number" id="stat-security-score">100%</div>
+        <div class="label">Security Score</div>
+    </div>
+    <div class="stat-card latency">
+        <div class="stat-icon">&#9632;</div>
+        <div class="number" id="stat-latency">0<span style="font-size:14px;font-weight:400;">ms</span></div>
+        <div class="label">Avg Latency</div>
+    </div>
+    <div class="stat-card users">
+        <div class="stat-icon">&#9632;</div>
+        <div class="number" id="stat-users">0</div>
+        <div class="label">Unique Users</div>
+    </div>
+    <div class="stat-card pii">
+        <div class="stat-icon">&#9632;</div>
+        <div class="number" id="stat-pii">0</div>
+        <div class="label">PII Redacted</div>
+        <div class="stat-mini" id="stat-pii-rate"></div>
+    </div>
+    <div class="stat-card throughput">
+        <div class="stat-icon">&#9632;</div>
+        <div class="number" id="stat-throughput">0</div>
+        <div class="label">Requests/min</div>
+    </div>
+</div>
+
+<!-- ── CHARTS ───────────────────────────────────────────── -->
+<div class="charts-row">
+    <div class="chart-card">
+        <h3>Block Distribution</h3>
+        <div class="chart-container"><canvas id="pieChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h3>Events by Category</h3>
+        <div class="chart-container"><canvas id="barChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h3>Request Timeline</h3>
+        <div class="chart-container"><canvas id="lineChart"></canvas></div>
+    </div>
+</div>
+
+<!-- ── AUDIT TABLE ─────────────────────────────────────── -->
+<div class="section">
+    <div class="section-header">
+        <h2>Audit Log</h2>
+        <div class="filter-bar">
+            <input type="text" id="search-input" placeholder="Search path or user..." oninput="filterTable()">
+            <select id="event-filter" onchange="filterTable()">
+                <option value="">All Events</option>
+                <option value="ALLOWED">Allowed</option>
+                <option value="BLOCKED_TOXIC">Toxic</option>
+                <option value="BLOCKED_ILLEGAL_FINANCE">Financial</option>
+                <option value="BLOCKED_PROMPT_INJECTION">Injection</option>
+                <option value="BLOCKED_MALICIOUS_CODE">Malicious</option>
+                <option value="BLOCKED_NO_AUTH">No Auth</option>
+                <option value="BLOCKED_RATE_LIMIT">Rate Limit</option>
+                <option value="BLOCKED_FORBIDDEN">Forbidden</option>
+            </select>
+            <select id="status-filter" onchange="filterTable()">
+                <option value="">All Status</option>
+                <option value="200">200</option>
+                <option value="401">401</option>
+                <option value="403">403</option>
+                <option value="429">429</option>
+                <option value="451">451</option>
+            </select>
+            <button class="btn-sm" onclick="exportCSV()">Export CSV</button>
+            <button class="btn-sm" onclick="clearFilters()">Clear</button>
+        </div>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th onclick="sortTable('timestamp')">Timestamp <span class="sort-arrow" id="sort-arrow-timestamp">&#8597;</span></th>
+                    <th onclick="sortTable('user')">User <span class="sort-arrow" id="sort-arrow-user">&#8597;</span></th>
+                    <th onclick="sortTable('method')">Method <span class="sort-arrow" id="sort-arrow-method">&#8597;</span></th>
+                    <th onclick="sortTable('path')">Path <span class="sort-arrow" id="sort-arrow-path">&#8597;</span></th>
+                    <th onclick="sortTable('statusCode')">Status <span class="sort-arrow" id="sort-arrow-statusCode">&#8597;</span></th>
+                    <th onclick="sortTable('latency')">Latency <span class="sort-arrow" id="sort-arrow-latency">&#8597;</span></th>
+                    <th onclick="sortTable('totalTokens')">Tokens <span class="sort-arrow" id="sort-arrow-totalTokens">&#8597;</span></th>
+                    <th onclick="sortTable('toxicityScore')">Toxicity <span class="sort-arrow" id="sort-arrow-toxicityScore">&#8597;</span></th>
+                    <th>PII</th>
+                    <th onclick="sortTable('event')">Event <span class="sort-arrow" id="sort-arrow-event">&#8597;</span></th>
+                </tr>
+            </thead>
+            <tbody id="logs-table">
+                <tr><td colspan="10" class="empty">Waiting for requests...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="refresh-info">Auto-refreshes every <span id="refresh-interval-display">3</span>s &bull; <span id="log-count-display">0</span> entries &bull; <span id="last-update">—</span></div>
+
+<div class="footer">
+    <span>LLM Secure Gateway &bull; PFE Satoripop 2026</span>
+    <span>Spring Cloud Gateway + Spring AI + Keycloak + Redis + Presidio</span>
+</div>
+
+</div>
+
+<script>
+// ── STATE ──────────────────────────────────────────────────
+var allLogs = [];
+var timelineData = {};
+var detailTimestamps = {};
+var sortKey = null;
+var sortDir = 'asc';
+var refreshPaused = false;
+var dashboardAuthenticated = false;
+
+// ── AUTH ────────────────────────────────────────────────────
+function showDashboard() {
+    document.getElementById('login-overlay').style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+}
+function showLogin() {
+    document.getElementById('login-overlay').style.display = 'flex';
+    document.getElementById('dashboard').style.display = 'none';
+}
+function doLogin() {
+    var user = document.getElementById('login-user').value;
+    var pass = document.getElementById('login-pass').value;
+    document.getElementById('login-error').style.display = 'none';
+    fetch('/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user, password: pass })
+    })
+    .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+    .then(function (result) {
+        if (result.ok) {
+            document.getElementById('user-label').textContent = result.data.username || '';
+            showDashboard();
+            fetchAudit();
+            fetchSummary();
+        } else {
+            document.getElementById('login-error').textContent = result.data.error || 'Invalid credentials';
+            document.getElementById('login-error').style.display = 'block';
+            document.getElementById('login-pass').value = '';
+        }
+    })
+    .catch(function () {
+        document.getElementById('login-error').textContent = 'Cannot reach server';
+        document.getElementById('login-error').style.display = 'block';
+    });
+}
+function doLogout() {
+    fetch('/logout', { method: 'POST', credentials: 'include' }).finally(function () {
+        document.getElementById('login-user').value = '';
+        document.getElementById('login-pass').value = '';
+        showLogin();
+    });
+}
+fetch('/session', { credentials: 'include' })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+        if (data.authenticated) {
+            document.getElementById('user-label').textContent = data.username || '';
+            showDashboard();
+            fetchAudit();
+            fetchSummary();
+        } else {
+            showLogin();
+        }
+    })
+    .catch(function () { showLogin(); });
+
+// ── INSIGHTS ────────────────────────────────────────────────
+function toggleInsights() {
+    var panel = document.getElementById('insights-panel');
+    var toggle = document.getElementById('insights-toggle');
+    panel.classList.toggle('open');
+    toggle.classList.toggle('open');
+}
+function fetchSummary() {
+    fetch('/audit/summary', { credentials: 'include' })
+        .then(function (r) { return r.json(); })
+        .then(function (s) {
+            if (!s || s.error) return;
+            updateStats(s);
+            updateInsights(s);
+        })
+        .catch(function () {});
+}
+
+function updateStats(s) {
+    animateNumber('stat-total', s.total_requests || 0);
+    animateNumber('stat-allowed', s.allowed || 0);
+    animateNumber('stat-blocked', s.blocked || 0);
+    animateNumber('stat-users', s.unique_users || 0);
+    animateNumber('stat-pii', s.pii_detections || 0);
+
+    var total = s.total_requests || 1;
+    var blocked = s.blocked || 0;
+    var allowed = s.allowed || 0;
+    var pct = total > 0 ? Math.round((blocked / total) * 100) : 0;
+
+    document.getElementById('stat-allowed-pct').textContent = total > 0 ? Math.round((allowed / total) * 100) + '% of total' : '';
+    document.getElementById('stat-blocked-pct').textContent = pct + '% of total';
+
+    var score = Math.max(0, 100 - pct);
+    var scoreEl = document.getElementById('stat-security-score');
+    scoreEl.textContent = score + '%';
+    scoreEl.style.color = score > 90 ? '#34d399' : score > 75 ? '#f59e0b' : '#ef4444';
+
+    document.getElementById('stat-latency').innerHTML = (s.avg_latency_ms || 0) + '<span style="font-size:14px;font-weight:400;">ms</span>';
+    document.getElementById('stat-throughput').textContent = s.requests_per_minute || '0';
+    document.getElementById('stat-pii-rate').textContent = s.pii_rate ? s.pii_rate + '% of requests' : '';
+}
+
+function updateInsights(s) {
+    var total = s.total_requests || 0;
+    var blocked = s.blocked || 0;
+    var pct = total > 0 ? Math.round((blocked / total) * 100) : 0;
+
+    var summary = document.getElementById('insight-summary');
+    if (total === 0) {
+        summary.innerHTML = '<span style="color:#475569;">No data yet. Send requests to /llm/chat to see insights.</span>';
+    } else {
+        var topCat = s.top_blocked_category ? s.top_blocked_category.replace(/_/g, ' ').toLowerCase() : 'none';
+        var topLine = blocked > 0
+            ? '<span style="color:#ef4444;">' + blocked + ' threats blocked</span> &mdash; top: ' + topCat
+            : '<span style="color:#34d399;">No threats blocked</span>';
+        summary.innerHTML = '<span style="color:#60a5fa;">' + total + ' requests</span> processed &bull; '
+            + topLine + ' &bull; '
+            + '<span style="color:#a78bfa;">' + (s.avg_latency_ms || 0) + 'ms</span> avg latency';
+    }
+
+    var tagsEl = document.getElementById('insight-tags');
+    if (s.category_breakdown && Object.keys(s.category_breakdown).length > 0) {
+        var html = '';
+        var cats = {
+            'TOXIC': 'toxic',
+            'ILLEGAL_FINANCE': 'finance',
+            'PROMPT_INJECTION': 'injection',
+            'MALICIOUS_CODE': 'malicious'
+        };
+        Object.keys(s.category_breakdown).forEach(function (k) {
+            var cls = cats[k] || 'toxic';
+            html += '<span class="insight-tag ' + cls + '">' + k.replace(/_/g, ' ') + ': ' + s.category_breakdown[k] + '</span>';
+        });
+        tagsEl.innerHTML = html;
+    } else {
+        tagsEl.innerHTML = '<span style="color:#475569;font-size:11px;">No threats detected</span>';
+    }
+
+    var perf = document.getElementById('insight-performance');
+    perf.innerHTML = ''
+        + '<div><span style="color:#475569;">Requests/min:</span> <span style="color:#e2e8f0;">' + (s.requests_per_minute || '0') + '</span></div>'
+        + '<div><span style="color:#475569;">Avg toxicity:</span> <span style="color:#e2e8f0;">' + (s.avg_toxicity_score || '0.00') + '</span></div>'
+        + '<div><span style="color:#475569;">PII rate:</span> <span style="color:#e2e8f0;">' + (s.pii_rate || '0') + '%' + '</span></div>'
+        + '<div><span style="color:#475569;">Time range:</span> <span style="color:#64748b;font-size:11px;">' + (s.first_timestamp ? s.first_timestamp.substring(0, 16) : '—') + ' &mdash; ' + (s.last_timestamp ? s.last_timestamp.substring(0, 16) : '—') + '</span></div>';
+}
+
+function animateNumber(elId, target) {
+    var el = document.getElementById(elId);
+    var current = parseInt(el.textContent.replace(/[^0-9]/g, '')) || 0;
+    if (current === target) return;
+    var step = Math.max(1, Math.ceil((target - current) / 20));
+    var interval = setInterval(function () {
+        current += step;
+        if ((step > 0 && current >= target) || (step < 0 && current <= target)) {
+            current = target;
+            clearInterval(interval);
+        }
+        el.textContent = current;
+    }, 30);
+}
+
+// ── CHARTS ──────────────────────────────────────────────────
+var pieChart = new Chart(document.getElementById('pieChart'), {
+    type: 'doughnut',
+    data: {
+        labels: ['Allowed', 'Toxic', 'Financial', 'Injection', 'Malicious', 'No Auth', 'Rate Limit'],
+        datasets: [{
+            data: [1,0,0,0,0,0,0],
+            backgroundColor: ['#34d399','#ef4444','#f59e0b','#d946ef','#ef4444','#f87171','#f59e0b'],
+            borderWidth: 0
+        }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+            legend: { position: 'right', labels: { color: '#475569', font: { size: 10 }, padding: 8, boxWidth: 12 } },
+            tooltip: { callbacks: { label: function(ctx) { return ctx.label + ': ' + ctx.parsed; } } }
+        }
+    }
+});
+
+var barChart = new Chart(document.getElementById('barChart'), {
+    type: 'bar',
+    data: {
+        labels: ['Allowed', 'Toxic', 'Financial', 'Injection', 'Malicious'],
+        datasets: [{
+            label: 'Count',
+            data: [0,0,0,0,0],
+            backgroundColor: ['#34d399','#ef4444','#f59e0b','#d946ef','#ef4444'],
+            borderRadius: 4,
+            borderSkipped: false
+        }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: function(ctx) { return ctx.parsed.x + ' requests'; } } }
+        },
+        scales: {
+            x: { ticks: { color: '#475569', font: { size: 9 } }, grid: { color: '#0a1428' }, beginAtZero: true },
+            y: { ticks: { color: '#475569', font: { size: 9 } }, grid: { display: false } }
+        }
+    }
+});
+
+var lineChart = new Chart(document.getElementById('lineChart'), {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [
+            { label: 'Allowed', data: [], borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.08)', tension: 0.3, fill: true, pointRadius: 2, pointHoverRadius: 5 },
+            { label: 'Blocked', data: [], borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.08)', tension: 0.3, fill: true, pointRadius: 2, pointHoverRadius: 5 }
+        ]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: { legend: { labels: { color: '#475569', font: { size: 10 }, boxWidth: 12 } } },
+        scales: {
+            x: { ticks: { color: '#1e2d48', font: { size: 9 }, maxTicksLimit: 12 }, grid: { color: '#0a1428' } },
+            y: { ticks: { color: '#1e2d48', font: { size: 9 } }, grid: { color: '#0a1428' }, beginAtZero: true }
+        }
+    }
+});
+
+function updateCharts(logs) {
+    var c = { allowed:0, toxic:0, finance:0, injection:0, malicious:0, noauth:0, ratelimit:0 };
+    logs.forEach(function(l) {
+        var e = l.event || '';
+        if (e === 'ALLOWED') c.allowed++;
+        else if (e === 'BLOCKED_TOXIC' || e === 'BLOCKED_GUARDRAIL') c.toxic++;
+        else if (e === 'BLOCKED_ILLEGAL_FINANCE') c.finance++;
+        else if (e === 'BLOCKED_PROMPT_INJECTION') c.injection++;
+        else if (e === 'BLOCKED_MALICIOUS_CODE') c.malicious++;
+        else if (e === 'BLOCKED_NO_AUTH') c.noauth++;
+        else if (e === 'BLOCKED_RATE_LIMIT') c.ratelimit++;
+    });
+
+    pieChart.data.datasets[0].data = [c.allowed, c.toxic, c.finance, c.injection, c.malicious, c.noauth, c.ratelimit];
+    pieChart.update();
+
+    var totalBlocked = c.toxic + c.finance + c.injection + c.malicious;
+    barChart.data.datasets[0].data = [c.allowed, c.toxic, c.finance, c.injection, c.malicious];
+    barChart.update();
+
+    logs.forEach(function(l) {
+        var minute = l.timestamp ? l.timestamp.substring(0, 16) : '';
+        if (!minute) return;
+        if (!timelineData[minute]) timelineData[minute] = {allowed:0, blocked:0};
+        if (l.event === 'ALLOWED') timelineData[minute].allowed++;
+        else timelineData[minute].blocked++;
+    });
+    var sorted = Object.keys(timelineData).sort();
+    var minutes = sorted.slice(-30);
+    lineChart.data.labels = minutes.map(function(m) { return m.substring(11); });
+    lineChart.data.datasets[0].data = minutes.map(function(m) { return timelineData[m].allowed; });
+    lineChart.data.datasets[1].data = minutes.map(function(m) { return timelineData[m].blocked; });
+    lineChart.update();
+}
+
+// ── TABLE ───────────────────────────────────────────────────
+function eventBadge(event) {
+    var map = {
+        'ALLOWED': 'badge-allowed',
+        'BLOCKED_TOXIC': 'badge-toxic',
+        'BLOCKED_GUARDRAIL': 'badge-toxic',
+        'BLOCKED_ILLEGAL_FINANCE': 'badge-finance',
+        'BLOCKED_FINANCE': 'badge-finance',
+        'BLOCKED_PROMPT_INJECTION': 'badge-injection',
+        'BLOCKED_INJECTION': 'badge-injection',
+        'BLOCKED_MALICIOUS_CODE': 'badge-malicious',
+        'BLOCKED_NO_AUTH': 'badge-noauth',
+        'BLOCKED_RATE_LIMIT': 'badge-ratelimit',
+        'BLOCKED_FORBIDDEN': 'badge-forbidden'
+    };
+    var cls = map[event] || 'badge-allowed';
+    return '<span class="badge ' + cls + '">' + event + '</span>';
+}
+
+function statusClass(code) {
+    return 'status-' + code;
+}
+
+function statusText(code) {
+    var map = {200:'OK', 400:'Bad Request', 401:'Unauthorized', 403:'Forbidden', 429:'Rate Limited', 451:'Legal Block', 503:'Unavailable', 504:'Timeout'};
+    return map[code] || '';
+}
+
+function toxColor(score) {
+    if (score >= 0.6) return '#ef4444';
+    if (score >= 0.2) return '#f59e0b';
+    return '#34d399';
+}
+
+function piiCell(log) {
+    if (log.piiDetected) {
+        var items = [];
+        if (log.piiCount > 0) items.push(log.piiCount + ' entities');
+        return '<span style="color:#fbbf24;">&#x1f6e1; ' + items.join(', ') + '</span>';
+    }
+    return '<span style="color:#1e2d48;">&mdash;</span>';
+}
+
+function detailPanelHtml(log) {
+    var tox = log.toxicityScore || 0;
+    var totalT = log.totalTokens || 0;
+    var promptT = log.promptTokens || 0;
+    var compT = log.completionTokens || 0;
+    var promptPct = totalT > 0 ? Math.round((promptT / totalT) * 100) : 0;
+    var matchCat = log.matchedCategory || '';
+    var matchPat = log.matchedPattern || '';
+    var isBlocked = log.event && log.event !== 'ALLOWED';
+
+    return '<div class="detail-panel" id="detail-' + log.correlationId + '">'
+        + '<div class="detail-grid">'
+        + '<div class="detail-field"><div class="detail-label">Correlation ID</div>'
+        + '<div class="detail-value code" style="font-size:11px;">' + log.correlationId
+        + ' <button class="copy-btn" onclick="navigator.clipboard.writeText(\'' + log.correlationId + '\')">Copy</button></div></div>'
+        + '<div class="detail-field"><div class="detail-label">Timestamp (Full)</div>'
+        + '<div class="detail-value">' + (log.timestamp || '') + '</div></div>'
+        + '<div class="detail-field"><div class="detail-label">Latency</div>'
+        + '<div class="detail-value">' + (log.latency || '') + '</div></div>'
+        + '<div class="detail-field"><div class="detail-label">Token Breakdown</div>'
+        + '<div class="detail-value">Prompt: ' + promptT + ' &bull; Completion: ' + compT + ' &bull; Total: ' + totalT + '</div>'
+        + '<div class="token-bar"><div class="token-bar-fill" style="width:' + promptPct + '%;"></div></div>'
+        + '<div style="font-size:9px;color:#475569;margin-top:2px;">' + promptPct + '% prompt, ' + (100 - promptPct) + '% completion</div></div>'
+        + (isBlocked ? '<div class="detail-field"><div class="detail-label">Matched Category</div>'
+            + '<div class="detail-value"><span class="badge ' + (matchCat === 'TOXIC' ? 'badge-toxic' : matchCat === 'ILLEGAL_FINANCE' ? 'badge-finance' : matchCat === 'PROMPT_INJECTION' ? 'badge-injection' : 'badge-malicious') + '">' + (matchCat || '—') + '</span></div></div>' : '')
+        + (isBlocked ? '<div class="detail-field"><div class="detail-label">Matched Pattern</div>'
+            + '<div class="detail-value code" style="font-size:11px;">' + (matchPat || '—') + '</div></div>' : '')
+        + '<div class="detail-field"><div class="detail-label">Toxicity Score</div>'
+        + '<div class="detail-value" style="color:' + toxColor(tox) + ';">' + tox.toFixed(2) + ' / 1.00</div></div>'
+        + '</div></div>';
+}
+
+function buildRow(log) {
+    var isAllowed = log.event === 'ALLOWED';
+    var tox = log.toxicityScore || 0;
+    var rid = 'row-' + log.correlationId;
+    var expanded = detailTimestamps[log.correlationId] || false;
+    return '<tr class="clickable-row ' + (isAllowed ? 'row-allowed' : 'row-blocked') + '" onclick="toggleDetail(\'' + log.correlationId + '\')" id="' + rid + '">'
+        + '<td>' + (log.timestamp || '') + '</td>'
+        + '<td>' + (log.user || '') + '</td>'
+        + '<td>' + (log.method || '') + '</td>'
+        + '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (log.path || '') + '</td>'
+        + '<td class="' + statusClass(log.statusCode) + '">' + log.statusCode + ' <span style="font-weight:400;color:#475569;font-size:10px;">' + statusText(log.statusCode) + '</span></td>'
+        + '<td>' + (log.latency || '') + '</td>'
+        + '<td>' + (log.totalTokens || 0) + '</td>'
+        + '<td style="color:' + toxColor(tox) + ';">' + tox.toFixed(2) + '</td>'
+        + '<td>' + piiCell(log) + '</td>'
+        + '<td>' + eventBadge(log.event) + '</td>'
+        + '</tr>'
+        + '<tr class="detail-row" id="detail-row-' + log.correlationId + '" style="' + (expanded ? '' : 'display:none;') + '">'
+        + '<td colspan="10">' + detailPanelHtml(log) + '</td>'
+        + '</tr>';
+}
+
+function toggleDetail(id) {
+    var row = document.getElementById('detail-row-' + id);
+    if (!row) return;
+    var isOpen = row.style.display !== 'none';
+    row.style.display = isOpen ? 'none' : '';
+    detailTimestamps[id] = !isOpen;
+    var detailPanel = row.querySelector('.detail-panel');
+    if (detailPanel) {
+        detailPanel.classList.toggle('open');
+    }
+}
+
+var filteredLogs = [];
+function filterTable() {
+    var search = document.getElementById('search-input').value.toLowerCase();
+    var eventFilter = document.getElementById('event-filter').value;
+    var statusFilter = document.getElementById('status-filter').value;
+
+    filteredLogs = allLogs.filter(function(log) {
+        var matchSearch = !search
+            || (log.path || '').toLowerCase().includes(search)
+            || (log.user || '').toLowerCase().includes(search)
+            || (log.event || '').toLowerCase().includes(search);
+        var matchEvent = !eventFilter || (log.event || '') === eventFilter;
+        var matchStatus = !statusFilter || String(log.statusCode) === statusFilter;
+        return matchSearch && matchEvent && matchStatus;
+    });
+
+    applySort();
+}
+
+function applySort() {
+    var logs = filteredLogs.slice();
+    if (sortKey) {
+        logs.sort(function(a, b) {
+            var va = a[sortKey], vb = b[sortKey];
+            if (typeof va === 'string') va = va.toLowerCase();
+            if (typeof vb === 'string') vb = vb.toLowerCase();
+            if (va < vb) return sortDir === 'asc' ? -1 : 1;
+            if (va > vb) return sortDir === 'asc' ? 1 : -1;
+            return 0;
+        });
+    }
+    var tbody = document.getElementById('logs-table');
+    if (logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">No matching requests</td></tr>';
+        return;
+    }
+    tbody.innerHTML = logs.map(buildRow).join('');
+}
+
+function sortTable(key) {
+    if (sortKey === key) {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        sortKey = key;
+        sortDir = 'asc';
+    }
+    document.querySelectorAll('.sort-arrow').forEach(function(el) { el.classList.remove('active'); el.innerHTML = '&#8597;'; });
+    var arrow = document.getElementById('sort-arrow-' + key);
+    if (arrow) { arrow.innerHTML = sortDir === 'asc' ? '&#8593;' : '&#8595;'; arrow.classList.add('active'); }
+    applySort();
+}
+
+function clearFilters() {
+    document.getElementById('search-input').value = '';
+    document.getElementById('event-filter').value = '';
+    document.getElementById('status-filter').value = '';
+    sortKey = null;
+    sortDir = 'asc';
+    document.querySelectorAll('.sort-arrow').forEach(function(el) { el.classList.remove('active'); el.innerHTML = '&#8597;'; });
+    filterTable();
+}
+
+function exportCSV() {
+    var rows = [['Timestamp','User','Method','Path','Status','Latency','Tokens','Toxicity','PII','Event','CorrelationId']];
+    (filteredLogs.length ? filteredLogs : allLogs).forEach(function(l) {
+        rows.push([l.timestamp, l.user, l.method, l.path, l.statusCode, l.latency, l.totalTokens, l.toxicityScore, l.piiDetected ? l.piiCount : 0, l.event, l.correlationId]);
+    });
+    var csv = rows.map(function(r) { return r.map(function(v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'audit-log-' + new Date().toISOString().substring(0, 19) + '.csv';
+    a.click();
+}
+
+function toggleRefresh() {
+    refreshPaused = !refreshPaused;
+    var badge = document.getElementById('live-badge');
+    var text = document.getElementById('live-text');
+    if (refreshPaused) {
+        badge.classList.add('paused');
+        text.textContent = 'PAUSED';
+    } else {
+        badge.classList.remove('paused');
+        text.textContent = 'LIVE';
+    }
+}
+
+// ── MAIN LOOP ──────────────────────────────────────────────
+function fetchAudit() {
+    if (refreshPaused) return;
+    fetch('/audit', { credentials: 'include' })
+        .then(function(r) {
+            if (r.status === 401) {
+                dashboardAuthenticated = false;
+                showLogin();
+                return null;
+            }
+            dashboardAuthenticated = true;
+            return r.json();
+        })
+        .then(function(data) {
+            if (!data) return;
+            allLogs = data.logs || [];
+            document.getElementById('log-count-display').textContent = allLogs.length;
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+            updateCharts(allLogs);
+            filterTable();
+            fetchSummary();
+        })
+        .catch(function() {});
+}
+
+setInterval(function () { if (dashboardAuthenticated) fetchAudit(); }, 3000);
+</script>
+</body>
+</html>

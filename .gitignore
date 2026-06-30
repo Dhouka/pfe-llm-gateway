@@ -1,0 +1,56 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### macOS ###
+.DS_Store
+**/.DS_Store
+
+### Python (pii-service, llm-flask-service) ###
+venv/
+**/venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+
+### IDE (root, applies repo-wide) ###
+.idea/
+
+### Runtime audit log (AuditLogStore's on-disk persistence — see AuditLogStore.java) ###
+audit.db
+audit.db-wal
+audit.db-shm
+*.jsonl
